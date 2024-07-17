@@ -11,6 +11,12 @@ def sigmoid(z):
 def sigmoid_prime(z):
     return sigmoid(z)*(1-sigmoid(z))
 
+def ReLU(z):
+    return z*(z>0)
+
+def ReLU_prime(z):
+    return 1.*(z>=0)
+
 def load_data():
     mndata = MNIST('./MNIST_ORG')
     images, labels = mndata.load_training()
