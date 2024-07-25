@@ -1,6 +1,7 @@
 from mnist import MNIST
 import numpy as np
 import random
+import json
 
 def load_data():
     mndata = MNIST('./MNIST_ORG')
@@ -42,6 +43,7 @@ class Network(object):
             mini_batches = [training_data[k:k+mini_batch_size] for k in range(0, len(training_data), mini_batch_size)]
             for mini_batch in mini_batches:
                 self.update_network(mini_batch, eta)
+            self.save("data.json")
             if test_data:
                 print("Epoch ", i, ": ", self.evaluate(test_data), " / ", len(test_data))
             else:
@@ -81,7 +83,24 @@ class Network(object):
     def evaluate(self, test_data):
         test_results = [(np.argmax(self.feedforword(x)), y) for (x,y) in test_data]
         return sum(int(x==y) for x,y in test_results)
+    
+    def save(self, filename):
+        data = {"sizes":self.sizes,
+                "weights": [w.tolist() for w in self.weights],
+                "biases": [b.tolist() for b in self.biases]}
+        f = open(filename, "w")
+        json.dump(data, f)
+        f.close()
+    
+def load(filename):
+    f = open(filename, "r")
+    data = json.load(f)
+    f.close()
+    net = Network(data["sizes"])
+    net.weights = [np.array(w) for w in data["weights"]]
+    net.biases = [np.array(b) for b in data["biases"]]
+    return net
 
 training_data, test_data = load_data()
-net = Network([784,30,10])
+net = Network([784,100,30,10])
 net.SGD(training_data, 30, 10, 3.0, test_data=test_data)

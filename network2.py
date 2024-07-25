@@ -1,186 +1,112 @@
-import json
-import random
-import sys
+import torch
+import torch.nn as nn
+import torchvision
+import torchvision.transforms as transforms
 
-import numpy as np
-from mnist import MNIST
+batch_size = 64
+num_classes = 10
+learning_rate = 0.001
+num_epochs = 10
 
-def sigmoid(z):
-    return 1.0/(1.0+np.exp(-z))
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def sigmoid_prime(z):
-    return sigmoid(z)*(1-sigmoid(z))
+original_train_dataset = torchvision.datasets.MNIST(root = './data',
+                                                train = True,
+                                                transform = transforms.Compose([
+                                                    transforms.Resize((32,32)),
+                                                    transforms.ToTensor(),
+                                                    transforms.Normalize(mean=(0.1307,), std=(0.3081,))
+                                                ]), download=True)
 
-def ReLU(z):
-    return z*(z>0)
+augmented_train_dataset = torchvision.datasets.MNIST(root='./data',
+                                                     train=True,
+                                                     transform = transforms.Compose([
+                                                        transforms.Resize((32,32)),
+                                                        transforms.RandomRotation(degrees=30),
+                                                        transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+                                                        transforms.ToTensor(),
+                                                        transforms.Normalize(mean=(0.1307,), std=(0.3081,))
+                                                    ]),download=True)
 
-def ReLU_prime(z):
-    return 1.*(z>=0)
+combined_train_dataset = torch.utils.data.ConcatDataset([original_train_dataset, augmented_train_dataset])
 
-def load_data():
-    mndata = MNIST('./MNIST_ORG')
-    images, labels = mndata.load_training()
-    images_t,labels_t = mndata.load_testing()
-    images = [np.reshape(i, (784, 1))/255 for i in images]
-    labels = [vector_output(o) for o in labels]
-    images_t = [np.reshape(i, (784, 1)) for i in images_t]
-    training_data = list(zip(images, labels))
-    test_data = list(zip(images_t, labels_t))
-    return training_data, test_data
+train_loader = torch.utils.data.DataLoader(dataset=combined_train_dataset,
+                                                batch_size = batch_size,
+                                                shuffle=True)
 
-def vector_output(o):
-    temp = np.zeros((10,1))
-    temp[o] = 1.0
-    return temp
+test_dataset = torchvision.datasets.MNIST(root = './data',
+                                         train = False,
+                                         transform = transforms.Compose([
+                                             transforms.Resize((32,32)),
+                                             transforms.ToTensor(),
+                                             transforms.Normalize(mean = (0.1325,), std=(0.3105,))
+                                         ]), download=True)
 
-class CrossEntropyCost(object):
-    @staticmethod
-    def fn(a,y):
-        return np.sum(np.nan_to_num(-y*np.log(a)-(1-y)*np.log(1-a)))
+test_loader = torch.utils.data.DataLoader(dataset=test_dataset,
+                                          batch_size=batch_size,
+                                          shuffle=True)
+
+class LeNet5(nn.Module):
+    def __init__(self, num_classes):
+        super(LeNet5, self).__init__()
+        self.layer1 = nn.Sequential(
+            nn.Conv2d(1, 6, kernel_size=5, stride=1, padding=0),
+            nn.BatchNorm2d(6),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2))
+        self.layer2 = nn.Sequential(
+            nn.Conv2d(6, 16, kernel_size=5, stride=1, padding=0),
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2))
+        self.fc = nn.Linear(400,120)
+        self.relu = nn.ReLU()
+        self.fc1 = nn.Linear(120,84)
+        self.relu1 = nn.ReLU()
+        self.fc2 = nn.Linear(84, num_classes)
     
-    @staticmethod
-    def delta(z, a, y):
-        return (a-y)
+    def forward(self, x):
+        out = self.layer1(x)
+        out = self.layer2(out)
+        out = out.reshape(out.size(0), -1)
+        out = self.fc(out)
+        out = self.relu(out)
+        out = self.fc1(out)
+        out = self.relu1(out)
+        out = self.fc2(out)
+        return out
 
-class Network(object):
+model = LeNet5(num_classes).to(device)
+cost = nn.CrossEntropyLoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
-    def __init__(self, sizes, cost=CrossEntropyCost):
-        self.num_layers = len(sizes)
-        self.sizes = sizes
-        self.default_weight_initializer()
-        self.cost = cost
 
-    def default_weight_initializer(self):
-        self.biases = [np.random.randn(y,1) for y in self.sizes[1:]]
-        self.weights = [np.random.randn(y, x)/np.sqrt(x) for x,y in zip(self.sizes[:-1], self.sizes[1:])]
     
-    def feedforward(self, a):
-        for b, w in zip(self.biases, self.weights):
-            a = sigmoid(np.dot(w, a)+b)
-        return a
-    
-    def SGD(self, training_data, mini_batch_size, eta, 
-            lmbda=0.0, 
-            test_data=None,
-            monitor_training_cost=False,
-            monitor_training_accuracy=False,
-            monitor_test_cost=False,
-            monitor_test_accuracy=False):
-        if test_data: n_data=len(test_data)
-        n = len(training_data)
-        training_cost, training_accuracy = [],[]
-        test_cost, test_accuracy = [],[]
-        no_improvement_in_n = 10
-        eta_decrease = 1
-        j=0   
-        i=0 
-        while i <= j:
-            random.shuffle(training_data)
-            mini_batches = [training_data[k:k+mini_batch_size] for k in range(0, len(training_data), mini_batch_size)]
-            for mini_batch in mini_batches:
-                self.update_network(mini_batch, eta, lmbda, len(training_data))
-            print("Epoch ", i, " training complete")
-            if monitor_training_cost:
-                cost = self.total_cost(training_data, lmbda)
-                training_cost.append(cost)
-                print("Cost on training data: ", cost)
-            if monitor_training_accuracy:
-                accuracy = self.accuracy(training_data, convert=True)
-                training_accuracy.append(accuracy)
-                print("Accuracy on trainin data: ", accuracy, " / ", n)
-            if monitor_test_cost:
-                cost = self.total_cost(test_data, lmbda, convert=True)
-                test_cost.append(cost)
-                print("Cost on test data: ", cost)
-            if monitor_test_accuracy:
-                accuracy = self.accuracy(test_data)
-                test_accuracy.append(accuracy)
-                if max(test_accuracy)==accuracy: j=i+no_improvement_in_n
-                print("Accuracy on test data: ", accuracy, " / ", n_data)
-            print("No improvements in ", i+no_improvement_in_n-j, " epochs")
-            self.save("data.json")
-            print("Network params saved to data.json")
-            i+=1
-            if i>j and eta_decrease<128:
-                eta /= 2
-                eta_decrease *= 2
-                j+=no_improvement_in_n
-            print(eta)
-        return training_cost, training_accuracy, test_cost, test_accuracy
-    
-    def update_network(self, mini_batch, eta, lmbda, n):
-        nabla_b = [np.zeros(b.shape) for b in self.biases]
-        nabla_w = [np.zeros(w.shape) for w in self.weights]
-        for x, y in mini_batch:
-            delta_nabla_b, delta_nabla_w = self.backprop(x, y)
-            nabla_b = [nb+dnb for nb, dnb in zip(nabla_b, delta_nabla_b)]
-            nabla_w = [nw+dnw for nw, dnw in zip(nabla_w, delta_nabla_w)]
-        self.weights = [(1-eta*(lmbda/n))*w-(eta/len(mini_batch))*nw 
-                        for w, nw in zip(self.weights, nabla_w)]
-        self.biases = [b-(eta/len(mini_batch))*nb 
-                        for b, nb in zip(self.biases, nabla_b)]
-    
-    def backprop(self, x, y):
-        nabla_b = [np.zeros(b.shape) for b in self.biases]
-        nabla_w = [np.zeros(w.shape) for w in self.weights]
-        activation = x
-        activations = [x]
-        zs = []
-        for b, w in zip(self.biases, self.weights):
-            z = np.dot(w,activation)+b
-            zs.append(z)
-            activation = sigmoid(z)
-            activations.append(activation)
-        delta = (self.cost).delta(zs[-1], activations[-1], y)
-        nabla_b[-1] = delta
-        nabla_w[-1] = np.dot(delta, activations[-2].transpose())
-        for l in range(2, self.num_layers):
-            z = zs[-l]
-            sp = sigmoid_prime(z)
-            delta = np.dot(self.weights[-l+1].transpose(), delta) * sp
-            nabla_b[-l] = delta
-            nabla_w[-l] = np.dot(delta, activations[-l-1].transpose())
-        return (nabla_b, nabla_w)
-    
-    def accuracy(self, data, convert=False):
-        if convert:
-            results = [(np.argmax(self.feedforward(x)), np.argmax(y)) for (x,y) in data]
-        else:
-            results = [(np.argmax(self.feedforward(x)), y) for (x,y) in data]
-        return sum(int(x==y) for (x,y) in results)
-    
-    def total_cost(self, data, lmbda, convert=False):
-        cost = 0.0
-        for x,y in data:
-            a = self.feedforward(x)
-            if convert: y = vector_output(y)
-            cost += self.cost.fn(a,y)/len(data)
-        cost += 0.5*(lmbda/len(data))*sum(
-            np.linalg.norm(w)**2 for w in self.weights
-        )
-        return cost
-    
-    def save(self, filename):
-        data = {"sizes":self.sizes,
-                "weights": [w.tolist() for w in self.weights],
-                "biases": [b.tolist() for b in self.biases],
-                "cost": str(self.cost.__name__)}
-        f = open(filename, "w")
-        json.dump(data, f)
-        f.close()
-    
-    def load(filename):
-        f = open(filename, "r")
-        data = json.load(f)
-        f.close()
-        cost = getattr(sys.modules[__name__], data["cost"])
-        net = Network(data["sizes"], cost=cost)
-        net.weights = [np.array(w) for w in data["weigths"]]
-        net.biases = [np.array(b) for b in data["biases"]]
-        return net
 
-training_data, test_data = load_data()
-net = Network([784,30,10])
-training_cost, training_accuracy, test_cost, test_accuracy = net.SGD(training_data, 10, 0.5, lmbda=5.0, test_data=test_data, monitor_training_cost=False, monitor_training_accuracy=False, monitor_test_cost=True, monitor_test_accuracy=True)
+for epoch in range(num_epochs):
+    for i, (images, labels) in enumerate(train_loader):
+        images = images.to(device)
+        labels = labels.to(device)
 
-#momentum-based stochastic gradient descent
+        outputs = model(images)
+        loss = cost(outputs, labels)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+    print('Epoch [{}/{}], Loss: {:.4f}'
+            .format(epoch+1, num_epochs, loss.item()))
+    with torch.no_grad():
+        correct = 0
+        total = 0
+        for images, labels in test_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+            outputs = model(images)
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+        
+        print('Accuracy of the network: {} %'.format(100*correct/total))
+    torch.save(model.state_dict(), 'data2.pt')
