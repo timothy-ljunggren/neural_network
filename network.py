@@ -1,8 +1,10 @@
+#library for training data, faster linear algebra calculation, shuffle of training data, and export of network data
 from mnist import MNIST
 import numpy as np
 import random
 import json
 
+#loads the training data from ./MNIST_ORG and formats it
 def load_data():
     mndata = MNIST('./MNIST_ORG')
     images, labels = mndata.load_training()
@@ -14,29 +16,35 @@ def load_data():
     test_data = list(zip(images_t, labels_t))
     return training_data, test_data
 
+#formats expexted output to vector 
 def vector_output(o):
     temp = np.zeros((10,1))
     temp[o] = 1.0
     return temp
 
+#activation function of out network
 def sigmoid(z):
     return 1.0/(1.0+np.exp(-z))
 
+#derivative of out activation function for backpropagation
 def sigmoid_prime(z):
     return sigmoid(z)*(1-sigmoid(z))
 
 class Network(object):
+    #creates all params of the network (layers, biases, weights)
     def __init__(self, sizes):
         self.num_layers = len(sizes)
         self.sizes = sizes
         self.biases = [np.random.randn(y,1) for y in sizes[1:]]
         self.weights = [np.random.randn(x,y) for x,y in zip(sizes[1:], sizes[:-1])]
 
+    #calculates the output of the network
     def feedforword(self, a):
         for b,w in zip(self.biases, self.weights):
             a = sigmoid(np.dot(w, a)+b)
         return a
     
+    #shuffles and splits the training data in batches and trains with each batch
     def SGD(self, training_data, epochs, mini_batch_size, eta, test_data = None):
         random.shuffle(training_data)
         for i in range(epochs):
@@ -49,6 +57,7 @@ class Network(object):
             else:
                 print("Epoch ", i, " complete")
     
+    #updates the weights and biases of the network according to the nabla from backpropagation
     def update_network(self, mini_batch, eta):
         nabla_b = [np.zeros(b.shape) for b in self.biases]
         nabla_w = [np.zeros(w.shape) for w in self.weights]
@@ -59,6 +68,7 @@ class Network(object):
         self.weights = [w-(eta/len(mini_batch))*nw for w,nw in zip(self.weights, nabla_w)]
         self.biases = [b-(eta/len(mini_batch))*nb for b,nb in zip(self.biases, nabla_b)]
 
+    #finds the nabla of the cost function with respect to each weight and biases
     def backprop(self, x, y):
         nabla_b = [np.zeros(b.shape) for b in self.biases]
         nabla_w = [np.zeros(w.shape) for w in self.weights]
@@ -80,10 +90,12 @@ class Network(object):
             nabla_w[-l] = np.dot(derivative, activations[-l-1].transpose())
         return (nabla_b, nabla_w)
 
+    #checks the accuracy of the network
     def evaluate(self, test_data):
         test_results = [(np.argmax(self.feedforword(x)), y) for (x,y) in test_data]
         return sum(int(x==y) for x,y in test_results)
     
+    #saves the network architecture to file
     def save(self, filename):
         data = {"sizes":self.sizes,
                 "weights": [w.tolist() for w in self.weights],
@@ -91,7 +103,8 @@ class Network(object):
         f = open(filename, "w")
         json.dump(data, f)
         f.close()
-    
+
+#function to create a network from file
 def load(filename):
     f = open(filename, "r")
     data = json.load(f)
@@ -101,6 +114,9 @@ def load(filename):
     net.biases = [np.array(b) for b in data["biases"]]
     return net
 
+#loads the training data
 training_data, test_data = load_data()
+#creates a network with 4 layers and 784,100,30,10 neurons each
 net = Network([784,100,30,10])
+#trains the network
 net.SGD(training_data, 30, 10, 3.0, test_data=test_data)
